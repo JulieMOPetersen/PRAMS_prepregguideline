@@ -15,19 +15,27 @@ fnGenBinMod <- function(x){
 fnCleanVariables<- function(dfMerged){
   dfMerged <- dfMerged%>%
     mutate(EXER = fnGenBinSubt(PRE_EXER))%>%
-    #mutate(BMI_OVER = as.factor(as.integer(MOM_BMIG_QX_REV >= 3)))%>%
+    mutate(BMI_OVER = as.factor(as.integer(MOM_BMIG_QX_REV >= 3)))%>%
+    # mutate(PRE_DIET_EXER = as.factor(as.integer(
+    #   ifelse((MOM_BMIG_BC >= 3) & ((!is.na(PRE_DIET)) | (!is.na(PRE_EXER))),
+    #          ((MOM_BMIG_BC >= 3) & ((PRE_DIET == 2) | (PRE_EXER == 2))),
+    #          NA))) ,
+    #   PRE_DIET_EXER = ifelse((STATE%in%vecMaternalStates) & (MOM_BMIG_BC%in%c(1,2)),2, PRE_DIET_EXER ),
+    #   PRE_DIET_EXER = factor(PRE_DIET_EXER, labels = 0:1))%>%
     mutate(PRE_DIET_EXER = as.factor(as.integer(
-      ifelse((MOM_BMIG_BC >= 3) & ((!is.na(PRE_DIET)) | (!is.na(PRE_EXER))), 
-             ((MOM_BMIG_BC >= 3) & ((PRE_DIET == 2) | (PRE_EXER == 2))), 
-             NA))) )%>%
+      ifelse((MOM_BMIG_BC >= 3) & (!is.na(PRE_DIET)), 
+             ((MOM_BMIG_BC >= 3) & (PRE_DIET == 2)), 
+             NA))) ,
+      PRE_DIET_EXER = ifelse((STATE%in%vecMaternalStates) & (MOM_BMIG_BC%in%c(1,2)),2, PRE_DIET_EXER ),
+      PRE_DIET_EXER = factor(PRE_DIET_EXER, labels = 0:1))%>%
     mutate(VITAMIN_BIN = as.factor(as.integer(VITAMIN != 1)))%>%
     mutate(PNC_4MTH = as.factor(as.integer(PNC_MTH<5)))%>%
     mutate(FLU_SHOT = as.factor(as.integer(FLUPREG > 1)))%>%
     mutate(ECIG_3B_A = ifelse(ECIG_3B_A==5,1,2))%>%
     mutate(NO_SMK_3B = as.factor(SMK63B_A%%2))%>%
     mutate(NO_ECIG_3B = as.factor(ECIG_3B_A%%2))%>%
-    mutate(LESS_DRK_3B = as.factor(as.integer(DRK8_3B > 3)))%>%
-    mutate(NO_DRK_3B = as.factor(as.integer(DRK8_3B == 6)))%>%
+    mutate(LESS_DRK_3B = as.factor(ifelse((DRK_2YRS==1)&(!is.na(DRK_2YRS)),1,as.integer(DRK8_3B > 3))))%>%
+    mutate(NO_DRK_3B = as.factor(ifelse((DRK_2YRS==1)&(!is.na(DRK_2YRS)),1,as.integer(DRK8_3B == 6))))%>%
     mutate(DENT = ifelse(((PRE_VIST==1) & (is.na(TYP_DDS))), 1, TYP_DDS))%>%
     mutate(DENTAL = as.factor(as.numeric((DENT-1) | (DDS_CLN - 1))))
   
@@ -41,6 +49,33 @@ fnCleanVariables<- function(dfMerged){
     sum, na.rm = TRUE
   ) >= 4) |> 
     as.factor()
+  
+  dfMerged$NON_ADH3 = as.integer(apply(
+    dfMerged%>%
+      select(all_of(vecNonAdh))%>%
+      mutate(across(everything(), ~!as.numeric(levels(.x))[.x])),
+    1,
+    sum, na.rm = TRUE
+  ) >= 3) |> 
+    as.factor()
+  
+  
+  dfMerged$NON_ADH5 = as.integer(apply(
+    dfMerged%>%
+      select(all_of(vecNonAdh))%>%
+      mutate(across(everything(), ~!as.numeric(levels(.x))[.x])),
+    1,
+    sum, na.rm = TRUE
+  ) >= 5) |> 
+    as.factor()
+  
+  vecMatStates = dfMerged%>%
+    filter(!is.na(EXER))%>%
+    select(STATE)%>%
+    unique()%>%
+    unlist()
+  
+  
   
 #Adherers
   dfMerged$ADH = as.integer(apply(
@@ -69,6 +104,40 @@ fnCleanVariables<- function(dfMerged){
     sum, na.rm = TRUE
   )>= 4) ) & (vecNAsCount)), 'NON_ADH'] = NA
   
+  #Adding NAs for non-adherers
+  #More than or equal to 3 NAs and categorized as '0' or adherers, are now NAs
+  
+  vecNAsCount3 = apply(dfMerged%>%
+                        select(vecNonAdh)%>%
+                        mutate(across(everything(), ~as.integer(is.na(.x)))),
+                      1,
+                      sum) >=3
+  
+  dfMerged[((!as.integer(apply(
+    dfMerged%>%
+      select(vecNonAdh)%>%
+      mutate(across(everything(), ~!as.numeric(levels(.x))[.x])),
+    1,
+    sum, na.rm = TRUE
+  )>= 3) ) & (vecNAsCount3)), 'NON_ADH'] = NA
+  
+  #Adding NAs for non-adherers
+  #More than or equal to 4 NAs and categorized as '0' or adherers, are now NAs
+  
+  vecNAsCount5 = apply(dfMerged%>%
+                        select(vecNonAdh)%>%
+                        mutate(across(everything(), ~as.integer(is.na(.x)))),
+                      1,
+                      sum) >=5
+  
+  dfMerged[((!as.integer(apply(
+    dfMerged%>%
+      select(vecNonAdh)%>%
+      mutate(across(everything(), ~!as.numeric(levels(.x))[.x])),
+    1,
+    sum, na.rm = TRUE
+  )>= 5) ) & (vecNAsCount5)), 'NON_ADH'] = NA
+  
   
   #Adding NAs for adherers
   #More than or equal to 4 NAs and categorized as '0' or adherers, are now NAs
@@ -86,6 +155,50 @@ fnCleanVariables<- function(dfMerged){
     1,
     sum, na.rm = TRUE
   )>= 4) ) & (vecNAsCountadh)), 'ADH'] = NA  
+
+################################################################################
+#Adding the new mini-NONADH
+  
+  dfMerged$NON_ADHGRP1 = dfMerged%>%
+    select(vecGrp1)%>%
+    mutate(across(everything(), ~!as.numeric(levels(.x))[.x]))%>%
+    mutate(NON_ADHGrp1 = ifelse(if_all(everything(), ~is.na(.)),
+                                NA,
+                                rowSums(across(vecGrp1), na.rm = T)),
+           NON_ADHGrp1 = as.factor(as.numeric(NON_ADHGrp1==length(vecGrp1))))%>%
+    select(NON_ADHGrp1)%>%
+    unlist()
+  
+  dfMerged$NON_ADHGRP2 = dfMerged%>%
+    select(vecGrp2)%>%
+    mutate(across(everything(), ~!as.numeric(levels(.x))[.x]))%>%
+    mutate(NON_ADHGrp2 = ifelse(if_all(everything(), ~is.na(.)),
+                                NA,
+                                rowSums(across(vecGrp2), na.rm = T)),
+           NON_ADHGrp2 = as.factor(as.numeric(NON_ADHGrp2==length(vecGrp2))))%>%
+    select(NON_ADHGrp2)%>%
+    unlist()
+  
+  dfMerged$NON_ADHGRP3 = dfMerged%>%
+    select(vecGrp3)%>%
+    mutate(across(everything(), ~!as.numeric(levels(.x))[.x]))%>%
+    mutate(NON_ADHGrp3 = ifelse(if_all(everything(), ~is.na(.)),
+                                NA,
+                                rowSums(across(vecGrp3), na.rm = T)),
+           NON_ADHGrp3 = as.factor(as.numeric(NON_ADHGrp3==length(vecGrp3))))%>%
+    select(NON_ADHGrp3)%>%
+    unlist()
+  
+  dfMerged$NON_ADHGRP4 = dfMerged%>%
+    select(vecGrp4)%>%
+    mutate(across(everything(), ~!as.numeric(levels(.x))[.x]))%>%
+    mutate(NON_ADHGrp4 = ifelse(if_all(everything(), ~is.na(.)),
+                                NA,
+                                rowSums(across(vecGrp4), na.rm = T)),
+           NON_ADHGrp4 = as.factor(as.numeric(NON_ADHGrp4==length(vecGrp4))))%>%
+    select(NON_ADHGrp4)%>%
+    unlist()
+  
 ################################################################################  
 #Preparing covariates
   dfMerged[,c('DIAB', 'HBP', 'DPRS', 'RUR')] = 
@@ -314,6 +427,7 @@ fnCleanVariables<- function(dfMerged){
   dfMerged = dfMerged%>%
     mutate(#PREG_INTERVAL = as.factor(ifelse(ILLB_MO<12, 0, 1)),
            PRE_CONDN = as.factor(as.numeric((BPG_DIAB8-1) | (BPG_HBP8-1) | (BPG_DEPRS8-1) | (MOM_BMIG_BC == 4))),
+           PRE_COND2 = as.factor(as.numeric((BPG_DIAB8-1) | (BPG_HBP8-1) | (BPG_DEPRS8-1) )),
            P_PRTERM = as.factor(P_PRTERM%%2))
  
 ################################################################################ 
@@ -356,7 +470,14 @@ fnCleanVariables<- function(dfMerged){
            LGA = as.factor(LGA%%2))
   
 
-  
+  ADH_SUM = apply(dfMerged[,all_of(vecPrimaryVariables)], 1, \(row){
+    row%>%
+      as.data.frame()%>%
+      mutate(across(everything(), ~as.numeric(as.numeric(.x)==0)))%>%
+      sum(na.rm=T)
+    
+  })
+  dfMerged = cbind(dfMerged, ADH_SUM)
   dfMerged
 }
 

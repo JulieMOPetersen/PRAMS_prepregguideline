@@ -20,959 +20,527 @@ dfMaternalHealth <- read_sas('../data/phase8_2016_2022_std_l.sas7bdat')
 
 dfMerged = merge(dfSurvey, dfMaternalHealth, by = 'ID', all.x = TRUE)
 
-#################################################################################
-#delineating the variables
-vecWeightVariables = c('SUD_NEST', 'TOTCNT', 'WTANAL', 'STATE', 'ID', 'STRATUMC', 'NEST_YR')
-
-
-vecPrimaryVariables = c('PRE_DIET_EXER', 'VITAMIN_BIN', 'PNC_4MTH', 'FLU_SHOT', 'EXER',
-                        'NO_SMK_3B', 'NO_ECIG_3B', 'NO_DRK_3B', 'DENTAL', 'LESS_DRK_3B')
-
-vecNonAdh = c('PRE_DIET_EXER', 'VITAMIN_BIN', 'PNC_4MTH', 'FLU_SHOT', 'EXER', 
-              'NO_SMK_3B', 'NO_ECIG_3B', 'NO_DRK_3B', 'DENTAL')
-
-vecDependents = c('MOM_BMIG_QX_REV', 'VITAMIN', 'PNC_MTH', 'FLUPREG', 'ECIG_3B_A',
-                  'SMK63B_A', 'DRK83B_A', 'DRK8_3B', 'TYP_DDS', 'ILLB_MO', 'P_PRTERM',
-                  'MOM_BMI', 'INSWORK8', 'INSPAR', 'INSHCEX','INSMED', 'INSNONE', 
-                  'INSOTH', 'INSCHIP', 'INSGOV', 'INSGOV2', 'INSMIL', 'INSIHS', 
-                  'HISP_BC', 'MARRIED', 'MAT_DEG', 'MAT_RACE_PU', 'NCHS_URB_RUR2', 
-                  'OTH_TERM', 'PRE_DIET', 'PRE_EXER', 'BPG_DIAB8', 'BPG_HBP8',
-                  'BPG_DEPRS8', 'PGINTENT', 'INCOME8', 'INC_NDEP', 'MAT_AGE_PU',
-                  'MAT_AGE_NAPHSIS_VT', 'MAT_AGE_NAPHSIS_AK', 'MAT_RACE_PU_AK',
-                  'TYP_DOCT', 'TYP_ILLN', 'TYP_INJR', 'TYP_MH', 'TYP_OBGN', 'TYP_OTHR',
-                  'TYP_DDS', 'TYP_BC', 'NON_ADH', 'PRE_VIST', 'DDS_CLN', 'RF_GHYPE', 'RF_EHYPE',
-                  'RF_GDIAB', 'MM_DIAB', 'DEL_1CS', 'DEL_RCS', 'GEST_WK_PU', 'GRAM_NAPHSIS',
-                  'MACROSOMIA', 'AB_NICU', 'SGA_10', 'LGA', 'PG_GDB8', 'MORB_BP8')
-
-vecCovs = c('MOM_BMIG_BC', 'DIAB', 'HBP', 'DPRS', 'INS_GRP', 'PREG_TRY',
-            'PVTY', 'HISP', 'MARRY', 'EDU', 'RACE', 'RUR', 'OTH_PREG', 'AGE_GRP')
-vecBinCov = c('DIAB', 'HBP', 'DPRS',  'HISP', 'MARRY','RUR', 'OTH_PREG','PVTY')
-vecMultCov <- vecCovs[!vecCovs%in%vecBinCov]
-
-vecPre = c('PRE_HLTH', 'PRE_KIDS', 'PRE_PRBC', 'PRE_SMK', 'PRE_VIT', 'PRE_WT')
-
-vecAssocCovs = c('AGE_GRP', 'MARRY', 'EDU', 'PVTY', 'INS_GRP', 'PREG_TRY', 'RUR',
-                  'HLTH_CR_VIST','PRE_CONDN')
-vecMomOutcomes = c('KESSNER', 'HYP_TNS', 'MOM_DIAB', 'CSEC')
-vecInfOutcomes = c('PRE_BIRTH',  'DEFECT', 'NICU', 'SGA', 'LGA')
-vecOutcome = c('HLTH_CR_VIST')
-vecHealth = c('TYP_DOCT', 'TYP_OBGN', 'TYP_OTHERS', 'TYP_DDS', 'TYP_BC')
-
-variables = c(vecWeightVariables, vecPrimaryVariables, vecDependents, 
-              vecCovs, vecPre, vecMomOutcomes, vecInfOutcomes)
-
-#slicing the columns
 ################################################################################
-#Slicing the columns
+vecMaternalStates = dfMerged%>%
+  filter(!is.na(PRE_DIET))%>%
+  select(STATE)%>%
+  unique()%>%
+  unlist()
 
-#State participation by year
-dfSurvey%>%
-   group_by(STATE)%>%
-   summarise(yr = across(NEST_YR, ~toString(unique(.x))),
-             ycnt = n_distinct(NEST_YR))%>%
-   arrange(ycnt)
+dfMerged = dfMerged[, colnames(dfMerged)%in%variables]
 
-
-dfMerged = dfMerged[!dfMerged$STATE %in% c('IN', 'MP', 'YC'), 
-                    colnames(dfMerged)%in%variables]
-
-
-################################################################################
 #Cleaning Variables
 dfMerged = fnCleanVariables(dfMerged)
 #creating the survey object
 
-#Design survey object
-prams.svy <- svydesign(ids = ~0, strata = ~SUD_NEST, 
-                       fpc = ~TOTCNT, weights = ~WTANAL, data = dfMerged)
-
 
 ################################################################################
-#Calculates Summary of Adherence Variables
+#Multiple Imputation
+lsGrp = list(vecGrp1, vecGrp2, vecGrp3, vecGrp4)
 
+dfMerged2 = dfMerged%>%
+  select(all_of(c(variables, "PRE_CONDN","PRE_COND2")))%>%
+  select(-all_of(setdiff(vecDependents, c(vecHealth, "DRK_2YRS","LGA",
+                                          "P_PRTERM"))))%>%
+  mutate(SGALGA = as.factor(ifelse((SGA==0)&(LGA==0),0,
+                                   ifelse(SGA==1,1,2))))%>%
+  select(-c(LGA,SGA))
 
-#Including NAs, N, Prop, CI
-#Backbone of some important tables
-lsSummary <- lapply(vecPrimaryVariables, 
-       \(variable){
-         if (variable %in% c('EXER', 'PRE_DIET_EXER')){
-           dfSum <- svyby(formula = reformulate(variable), ~STATE, 
-                          subset(prams.svy, !is.na(get(variable))), svyciprop, vartype = 'ci', na.rm = TRUE)
-         }
-         else{
-           dfSum <- svyby(formula = reformulate(variable), ~STATE, 
-                        prams.svy, svyciprop, vartype = 'ci', na.rm = TRUE)
-           }
-         dfSum <- dfSum%>%
-           as_tibble()%>%
-           mutate(across(c(2:4), ~round(.x,2)))%>%
-           mutate(ci = paste0('(', ci_l, ', ', ci_u, ')'))%>%
-           select(-c(ci_l,ci_u))%>%
-           rename_with(~paste0(paste0(variable,"_"), .x, recycle0 = TRUE), starts_with('ci'))
-        
-         
-         dfN <- svytable(formula = reformulate(c(variable, 'STATE')), 
-                         prams.svy, na.rm = TRUE)%>%
-           as_tibble()%>%
-           filter(.[[1]] ==1)%>%
-           select(STATE, n)%>%
-           rename_with(~paste0(paste0(variable, '_'), .x), starts_with('n'))%>%
-           merge(dfSum, by = 'STATE')
-         
-         dfNAs <- dfMerged%>%
-           group_by(STATE)%>%
-           summarise(NAs = sum(is.na(get(variable))))%>%
-           merge(dfN, by = 'STATE', all.x = TRUE)
-         
-         dfNAs[,c(1,3,4,5,2)]
-       })
-
-dfSummaries <- genSummary(vecPrimaryVariables, prams.svy)
-#Summary suitable for plotting in Tableau
-dfSummaryTableau = genTableauSummary(lsSummary)
-
-################################################################################
-#Graphics for the adherence
-
-
-#Baseline heatmap
-dfAdherence = dfSummaryTableau%>%
-  select(State, p, variable)%>%
-  mutate(Region = vecMatchStates[match(dfSummaryTableau$State, unlist(lsRegions))])
-
-lsOrdStates = dfAdherence%>%
-  group_by(State)%>%
-  summarise(p = mean(p, na.rm = TRUE))%>%
-  arrange(p)%>%
-  select(State)
-
-dfAdherence$State = factor(dfAdherence$State, levels = lsOrdStates[[1]])
-
-#Ranking the regions
-lsOrdRegions = dfAdherence%>%
-  group_by(State)%>%
-  mutate(p = mean(p, na.rm = TRUE))%>%
-  ungroup()%>%
-  distinct(State, .keep_all = TRUE)%>%
-  group_by(Region)%>%
-  summarise(p = mean(p))%>%
-  arrange(desc(p))%>%
-  select(Region)
-
-#Setting variable names
-dfAdherence$variable = factor(dfAdherence$variable, levels = list(
-   'VITAMIN_BIN',
-  'EXER',
-  'PRE_DIET_EXER',
-  'NO_DRK_3B',
-  'LESS_DRK_3B',
-  'NO_SMK_3B',
-  'NO_ECIG_3B',
-  'PNC_4MTH',
-  'FLU_SHOT',
-  'DENTAL'
-),
-labels = str_wrap(c(
-  'FA/multivitamin (any,1m prior)',
-  'Exercise (3+ days, 12m prior)',
-  'Among BMI ≥25, dieting or exercising (12m prior)',
-  'No drinking (3m prior)',
-  'No heavy drinking (3m prior)',
-  'No cigarette use (3m prior)',
-  'No e-cigarette use (3m prior)',
-  'Early prenatal care (within 4m)',
-  'Flu shot (12m prior or during pregnancy)',
-  'Dental (12m prior or during pregnancy)*'
-), width = 17))
-
-#Plotting the heatmap
-ggplot(dfAdherence, aes(y = State, x  = variable, fill = p))+
-  facet_grid(factor(Region, levels = lsOrdRegions[[1]])~., scales = 'free', space = 'free', switch = 'y')+
-  geom_tile(color = 'white')+
-  geom_text(aes(label = ifelse(is.na(p), "", format(p, nsmall = 2))), color = 'black', size = 4)+
-  theme_bw()+
-  scale_fill_gradientn(colors = hcl.colors(20, 'RdBu')[4:17])+
-  theme(strip.background = element_rect(fill = '#EEEEEE', color = '#FFFFFF'),
-        strip.placement = 'outside',
-        legend.position = 'none',
-        axis.title = element_blank(), 
-        axis.text = element_text(size = 14),
-        strip.text = element_text(size=15))
-
-dfAdhOvr = dfAdherence%>%
-          group_by(variable)%>%
-          summarise(p = median(p, na.rm = TRUE))%>%
-          mutate(State = 'Overall\nMedian',
-                 Region = 'SMTH')
-
-dfHMPAdherence = dfAdherence%>%
-  group_by(Region, variable)%>%
-  summarise(p = median(p, na.rm = TRUE))%>%
-  mutate(State = 'Median')%>%
-  rbind(dfAdherence)%>%
-  mutate(State = factor(State, levels = c('Median', lsOrdStates[[1]])),
-         label = ifelse(State == 'Median', p, ''),
-         colorval = ifelse(State == 'Median', as.character(1), NA))
-p1 = dfHMPAdherence%>%
-  ggplot(aes(y = State, x  = variable, fill = p))+
-  facet_grid(factor(Region, levels = lsOrdRegions[[1]])~., scales = 'free', space = 'free', switch = 'y')+
-  geom_tile(aes(color=colorval), height = 0.96, size = 1.1)+
-  geom_text(aes(label = ifelse(is.na(label), "", format(label, nsmall = 2))), color = 'black', size = 4)+
-  theme_bw()+
-  scale_color_manual(values = c('black'), na.value = 'white', guide = 'none')+
-  scale_fill_gradientn(colors = hcl.colors(20, 'RdBu')[4:17], name = 'Proportion')+
-  theme(strip.background = element_rect(fill = '#EEEEEE', color = '#FFFFFF'),
-        strip.placement = 'outside',
-
-        axis.title = element_blank(), 
-        axis.text.y = element_text(size = 14),
-        strip.text = element_text(size=15),
-        axis.text.x = element_blank(),
-        legend.title = element_text(size = 20, color = 'black'),
-        legend.text = element_text(size = 20, color = 'black'),
-        legend.position = 'right',
-        legend.key.height = unit(4, 'cm'), legend.key.width = unit(1,'cm'))
-
-p2 = ggplot(dfAdhOvr, aes(y = State, x  = variable, fill = p))+
-  geom_tile(aes(y=State, x = variable, fill = p), color = 'black', size = 1.1)+
-  facet_grid(factor(Region, levels = lsOrdRegions[[1]])~., scales = 'free', space = 'free', switch = 'y')+
-  geom_text(aes(label = ifelse(is.na(p), "", format(p, nsmall = 2))), 
-            color = 'black', size = 4, nudge_y = 0.1)+
-  theme_bw()+
-  scale_fill_gradientn(colors = hcl.colors(20, 'RdBu')[4:17])+
-  theme(strip.background = element_rect(fill = '#EEEEEE', color = '#FFFFFF'),
-        strip.text = element_blank(),
-        legend.position = 'none',
-        strip.placement = 'outside',
-        axis.title = element_blank(), 
-        axis.text = element_text(size = 14))
-p1+p2+plot_layout(nrow=2, heights = c(40,1))
-
-#Radar Plot
-dfRadar = dfAdherence%>%
-  pivot_wider(names_from = variable, values_from = p)%>%
-  group_by(Region)%>%
-  select(-State)%>%
-  summarise(across(everything(), ~median(.x, na.rm = TRUE)))%>%
-  as.data.frame()
-
-rownames(dfRadar) = dfRadar$Region
-dfRadar = dfRadar[lsOrdRegions[[1]], c(2:ncol(dfRadar))]
-dfRadar = rbind(rep(1, length(vecPrimaryVariables)), rep(0.1, length(vecPrimaryVariables)), dfRadar)
-dfRadar = dfRadar[,c(2, 9, 4, 3, 7, 6, 10, 8, 1, 5)]
-
-lsRadarLabels = str_wrap(c(
-  'FA/multivitamin (any,1m prior)',
-  'Dental (12m prior or during pregnancy)*',
-  'Flu shot (12m prior or during pregnancy)',
-  'Early prenatal care (within 4m)',
-  'No e-cigarette use (3m prior)',
-  'No cigarette use (3m prior)',
-  'No heavy drinking (3m prior)',
-  'No drinking (3m prior)',
-  'Among BMI ≥25, dieting or exercising (12m prior)',
-  'Exercise (3+ days, 12m prior)'
-), width = 12)
-
-vecCols = brewer.pal(length(lsRegions), 'Set2')
-
-#Saves the Radarplot in the specified location
-#dev.new(width = 2300, height = 2000, unit = 'px', noRStudioGD = TRUE)
-#png(filename = "../output/figures/Rplot.png",
-#    width = 2300, height = 2000, units = "px")
-radarchart(dfRadar, axistype = 1,
-           cglcol = "grey", cglty = 1, cglwd = 2,
-           vlabels = lsRadarLabels, vlcex = 3.5,
-           axislabcol = 'grey',
-           caxislabels=c('10%', '', '', '', '100%'), calcex =4,
-           pty = 16, pcol = vecCols, plty = 1, plwd = 2.5
-)
-#dev.off()
-
-legend(x=1.5, y=1, legend = lsOrdRegions[[1]], bty = "o", pch=20 , 
-       text.col = "black", col = vecCols, pt.cex=1.5,
-       title = 'Regions', inset =0.1)
-
-################################################################################
-#Adherence Table
-dfAdh = svyby(~ADH, ~STATE, subset(prams.svy, !is.na(ADH)), svyciprop, na.rm = TRUE)
-
-dfAdh%>%
-  as.data.frame()%>%
-  mutate(Region = vecMatchStates[match(STATE, unlist(lsRegions))])%>%
-  group_by(Region)%>%
-  summarise(Median=round(median(ADH), 2),
-            IQR = paste(format(round(quantile(ADH, probs = c(0.25, 0.75)), 2), nsmall = 2), collapse = '-'),
-            'Min/Max' = paste(format(round(range(ADH), 2), nsmall = 2), collapse = '-'))%>%
-  mutate(Region = factor(Region, levels = lsOrdRegions[[1]]))%>%
-  arrange(Region)
-
-
-dfAdh%>%
-  as.data.frame()%>%
-  summarise(Median=round(median(ADH), 2),
-            IQR = paste(format(round(quantile(ADH, probs = c(0.25, 0.75)), 2), nsmall = 2), collapse = '-'),
-            'Min/Max' = paste(format(round(range(ADH), 2), nsmall = 2), collapse = '-'))
-
-#Generateing three table for each
-dfMedian = dfAdherence%>%
-  pivot_wider(names_from = variable, values_from = p)%>%
-  group_by(Region)%>%
-  select(-State)%>%
-  summarise(across(everything(), ~format(round(median(.x, na.rm = TRUE), 2), nsmall=2)))%>%
-  mutate('Statistic' = 'Median')
-
-dfIQR = dfAdherence%>%
-  pivot_wider(names_from = variable, values_from = p)%>%
-  group_by(Region)%>%
-  select(-State)%>%
-  summarise(across(everything(), ~paste(format(round(quantile(.x, probs = c(0.25, 0.75), na.rm = TRUE), 2), nsmall = 2), collapse = '-')))%>%
-  mutate('Statistic' = 'IQR')
-
-dfMinMAx = dfAdherence%>%
-  pivot_wider(names_from = variable, values_from = p)%>%
-  group_by(Region)%>%
-  select(-State)%>%
-  summarise(across(everything(), ~paste(format(range(.x, na.rm = TRUE), nsmall=2), collapse = "-")))%>%
-  mutate('Statistic' = 'Min/Max')
-
-dfTab1 = rbind(dfMedian, dfIQR, dfMinMAx)%>%
-  mutate(Region = factor(Region, levels = lsOrdRegions[[1]]),
-         Statistic = factor(Statistic, levels = c('Median', 'IQR', 'Min/Max')))%>%
-  arrange(Region, Statistic)%>%
-  t()
-
-dfAdherence%>%
-  group_by(variable)%>%
-  summarise(Median=round(median(p, na.rm = TRUE), 2),
-            IQR = paste(format(round(quantile(p, probs = c(0.25, 0.75), na.rm = TRUE), 2), nsmall = 2), collapse = '-'),
-            'Min/Max' = paste(format(round(range(p, na.rm = TRUE), 2), nsmall = 2), collapse = '-'))
-
-
-################################################################################
-#Covariates for non-adherers
-#Binary
-
-dfCovariateSummaries = fnGenBinSummary(vecBinCov, prams.svy)
-
-#MULTIVARIATE
-vecStates = length(unique(dfMerged$STATE))
-dfMultCovSumm = fnGenMultSummary(vecMultCov, prams.svy)
-
-#Merging binary and multivariate
-
-dfCovariateSummaries[,'Level'] = NA
-dfCovariateSummaries = dfCovariateSummaries[,c(1, ncol(dfCovariateSummaries), c(2:(ncol(dfCovariateSummaries)-1)))]
-dfFinalCovSumm = rbind(dfCovariateSummaries, dfMultCovSumm)
-dfFinalCovSumm$Covariate = factor(dfFinalCovSumm$Covariate, 
-       labels =c( 'Age group', 'Diabetic', 'Depressed', 'Education Level', 'High Blood Pressure', 
-                  'Hispanic', 'Insurance', 'Married', 'BMI Group', 'Not Primigravida', 
-                  'Tried for Pregnancy', 'Poverty', 'Race', 'Rurality'))
-
-factor(vecBinCov, labels = c('Diabetes', 'High Blood Pressure', 'Depressed', 'Hispanic', 
-       'Married', 'Rural', 'Previous Pregnancies', 'Below Poverty'))
-
-#Table 2 generated
-#incomplete
-
-vecOrdLevels = c('<20', '20-24', '25-29', '30-34', '35+',
-                 'LessHS', 'CompHS', 'SomeCollege', 'Bachelors', 'Graduate',
-                 '1', '2', '3', '4',
-                 'White', 'Black', 'AI/AN', 'AsHwPI', 'Other',
-                 'Private', 'Medicaid', 'Others', 'None',
-                 '12', '10', '11',
-                 NA)
-vecOrdLabels = c('<20', '20-24', '25-29', '30-34', '35+',
-                 'Less than High School', 'Completed High School', 
-                 'Some College', 'Bachelors', 'Graduate',
-                 '1', '2', '3', '4',
-                 'White', 'Black', 'AI/AN', 'AsHwPi', 'Other',
-                 'Private', 'Medicaid', 'Others', 'None',
-                 'Yes', 'No', 'Not sure')
-
-tab2 = fnGetRegion(dfFinalCovSumm, lsRegions, lsOrdRegions)%>%
-  mutate(Level = factor(Level, levels = vecOrdLevels, labels = vecOrdLabels))%>%
-  arrange(Level)%>%
-  group_by(Covariate)%>%
-  mutate(sortMed = median(Northeast_0))%>%
-  ungroup()%>%
-  arrange(desc(sortMed), Level)%>%
-  select(-sortMed)
-
-dfFinalCovSumm%>%
-  select(Covariate, Level, Median_0, Median_1)
-################################################################################
-#HEALTH OUTCOMES
-
-dfOutcomeSummary <- fnGenBinSummary(vecOutcome, prams.svy)
-fnGetRegion(dfOutcomeSummary, lsRegions, lsOrdRegions)
-
-################################################################################
-###HEALTHCARE VISIT TYPES
-
-dfHealthCovs <- fnGenBinSummary(vecHealth, prams.svy)
-dfHealthCovs%>%
-  select(Covariate, Median_0, Median_1)%>%
-  mutate(Covariate =  factor(Covariate, 
-                             levels = c('TYP_OBGN', 'TYP_DOCT', 'TYP_DDS', 'TYP_BC', 'TYP_OTHERS'),
-                             labels = c('OBGYN',
-                                        'PCP',
-                                        'Dental',
-                                        'Family Planning',
-                                        'Other')))%>%
-  rename('Visit Types' = Covariate)
-
-
-fnGetRegion(dfHealthCovs, lsRegions, lsOrdRegions)%>%
-  mutate(Covariate =  factor(Covariate, 
-                             levels = c('TYP_OBGN', 'TYP_DOCT', 'TYP_DDS', 'TYP_BC', 'TYP_OTHERS'),
-                             labels = c('OBGYN',
-                                        'PCP',
-                                        'Dental',
-                                        'Family Planning',
-                                        'Other')))%>%
-  rename('Visit Types' = Covariate)
-
-
-##HEALTHCARE VISIT TYPES PLOTS
-dfHealthCovs%>%
-  #filter(Statistic == 'p')%>%
-  select(-c(Median_0, Median_1))%>%
-  pivot_longer(c(2:(vecStates*2 + 1)), names_to = "Adh", values_to = 'Percentages')%>%
-  mutate(Adh = str_extract(Adh, '(?<=_)(.*)'),
-         Percentages = round(Percentages, 2))%>%
-  #mutate(Percentages = round(Percentages/100, 2))%>%
-  group_by(Covariate, Adh)%>%
-  mutate(Med = median(Percentages, na.rm=TRUE),
-         Med = ifelse(Med == Percentages, Med, NA))%>%
-  ungroup()%>%
-  mutate(Covariate = factor(Covariate, 
-                            levels = c('TYP_OBGN', 'TYP_DOCT', 'TYP_DDS', 'TYP_BC', 'TYP_OTHERS'),
-                            labels = c('OBGYN',
-                                       'PCP',
-                                       'Dental',
-                                       'Family Planning',
-                                       'Other')))%>%
-  ggplot(aes(x = Covariate, y = Percentages, fill = Adh))+
-  geom_boxplot(position = position_dodge(0.9))+
-  geom_text(aes(x = Covariate, label = format(Med, nsmall = 2), group = Adh, y=Med), 
-            position = position_dodge(width=0.9),
-            vjust = -0.3, size = 6)+
-  scale_fill_manual(values = c("#B3D0E4", '#EBB0A8'),
-                    name = 'Adherence', labels = c('Adherent', 'Non-adherent'))+
-  labs(y='Proprtion of Particiapnts', x = 'Types of Health Care Visits (12M Prior)')+
-  theme_bw()+
-  theme(panel.grid = element_blank(),
-        axis.text = element_text(size = 20),
-        axis.title = element_text(size = 20, face = 'bold'),
-        legend.text = element_text(size = 15),
-        legend.title = element_text(size = 15),
-        legend.key.size = unit(3, 'line'))
-
-
-
-
-################################################################################
-#Covariates for questions asked in the surveys
-
-dfPreCovs <- fnGenBinSummary(vecPre, prams.svy)
-fnGetRegion(dfPreCovs, lsRegions, lsOrdRegions)
-
-#dfPreCovs = fnGenBinSummary(vecPre, prams.svy)
-dfPreCovs$Covariate = factor(dfPreCovs$Covariate,
-                             levels = c("PRE_KIDS",
-                                        "PRE_PRBC",
-                                        "PRE_HLTH",
-                                        "PRE_SMK",
-                                        "PRE_VIT",
-                                        "PRE_WT" ),
-                             labels = (
-                               c('Desire to have kids',
-                                'Birth Control',
-                                'Improve Health',
-                                'Ask for Smoking',
-                                'Vitamin',
-                                'Maintaining a Healthy Weight')))
-
-
-dfPreCovs%>%
-  select(Covariate, Median_0, Median_1)
-
-dfPreCovs%>%
-  #filter(Statistic == 'p')%>%
-  select(-c(Median_0, Median_1))%>%
-  pivot_longer(c(2:(vecStates*2 + 1)), names_to = "Adh", values_to = 'Percentages')%>%
-  mutate(Adh = str_extract(Adh, '(?<=_)(.*)'),
-         Percentages = round(Percentages, 2))%>%
-  #mutate(Percentages = round(Percentages/100, 2))%>%
-  group_by(Covariate, Adh)%>%
-  mutate(Med = median(Percentages),
-         Med = ifelse(Med == Percentages, Med, NA))%>%
-  ungroup()%>%
-  ggplot(aes(x = factor(Covariate, labels = str_wrap(
-    c('Desire to Have Kids',
-      'Birth Control',
-      'Improve Health before Pregnancy',
-      'Smoking',
-      'FA Vitamin',
-      'Maintaining Healthy Weight'), width=20)), y = Percentages, fill = Adh))+
-  geom_boxplot(position = position_dodge(0.9))+
-  geom_text(aes( label = Med, group = Adh, y=Med), 
-            position = position_dodge(width=0.9),
-            vjust = -0.3, size = 6)+
-  theme_bw()+
-  theme(panel.grid = element_blank(),
-        axis.text = element_text(size = 20),
-        axis.title = element_text(size = 20, face = 'bold'),
-        legend.text = element_text(size = 15),
-        legend.title = element_text(size = 15),
-        legend.key.size = unit(3, 'line'))+
-  scale_fill_manual(values = c("#B3D0E4", '#EBB0A8'),
-                    name = 'Adherence', labels = c('Adherent', 'Non-adherent'))+
-  labs(y='Proportion Discussed', x = 'Health Topics')
-
-
-################################################################################
-#Big Table
-
-prams.svy2 = prams.svy
-vecFacLevels = sapply(prams.svy2$variables[,sapply(prams.svy2$variables, class) %in% c('factor')], levels)
-vecFacLevels = sapply(vecFacLevels, c, -1)
-mapply(function(x){
+fnStateMice <- function(chrState, dfRawData){
+  tryCatch( {
+    print(chrState)
+    dfRawData = dfRawData%>%
+      filter(STATE==chrState)
+    dfDataset = dfRawData%>%
+      #select(-c(DRK_2YRS, MOM_BMIG_BC))
+      select(-c(DRK_2YRS))
+    
+    imp <- mice(dfDataset, maxit=0)
+    matPred <- imp$predictorMatrix
+    chrMethod <- imp$method
+    matWhere <- imp$where
+    
+    if (!chrState%in%vecMaternalStates) {
+      matPred[c('PRE_DIET_EXER', 'EXER'),]<-0
+      matPred[,c('PRE_DIET_EXER', 'EXER')]<-0
+      chrMethod[c('PRE_DIET_EXER', 'EXER')] <- ""
+    } else{
+      matWhere[dfRawData$MOM_BMIG_BC %in%c(1,2) ,'PRE_DIET_EXER']<-FALSE
+    }
+    
+    matPred[vecWeightVariables,]<-0
+    matPred[, c('NICU', 'HYP_TNS', 'PRE_DIET_EXER', 'PRE_BIRTH', 'P_PRTERM',
+                'EXER', 'LESS_DRK_3B', 'NO_DRK_3B',
+                vecHealth, vecPre)] <- 0
+    matWhere[(dfDataset$NEST_YR < 2020), c('NICU', 'HYP_TNS')] <- FALSE
+    matWhere[which(dfDataset$HLTH_CR_VIST == 0), c(vecHealth, vecPre)] <- FALSE
+    matWhere[which(dfRawData$DRK_2YRS == 0), c('NO_DRK_3B', 'LESS_DRK_3B')] <- FALSE
+    
+    
+    
+    #matPred[,c('NEST_YR')] <- 0
+    objMI <- mice(dfDataset, m=20, maxit = 5, where = matWhere,
+                  predictorMatrix = matPred, method = chrMethod,
+                  print =  FALSE, seed = 111)
+    dfComplete1 = mice::complete(objMI, action="long", include = TRUE)
+    
+    
+    return(dfComplete1)
+  },
+  error = \(e){
+    lsErrorState[[chrState]] <<- append(lsErrorState[[chrState]], chrState)
+    return()
+  }
   
-  print(x)
-  levels(prams.svy2$variables[,x]) <<- vecFacLevels[[x]]
-   
-}, names(vecFacLevels)[!names(vecFacLevels) %in% c('ADH.1')])
- 
-prams.svy2$variables[is.na(prams.svy2$variables)] = -1
+  )
+  
+}
 
-lsStates = as.list(unique(dfMerged$STATE))
-#lsStates = as.list(c('AZ'))
+fnMode <- function(vec, na.rm=FALSE){
+  if(na.rm){vec = vec[!is.na(vec)]}
+  vecUniq = unique(vec)
+  vecUniq[which.max(tabulate(match(vec, vecUniq)))]
+}
+# 
+# lsErrorState  = list()
+# vecPRAMSStates = unique(dfMerged$STATE)
+# lsStateMice = lapply(vecPRAMSStates, \(chrState){
+#   fnStateMice(chrState, dfMerged2)
+# })
+# names(lsStateMice) = vecPRAMSStates
+#Write it somewhere
+# write.csv(lsStateMice%>%
+#   bind_rows(), '../output/data_files/PRAMS_Imputed20_2025.12.16.gz')
+# 
+# dfStateMice  = lapply(lsStateMice, \(dfComplete){
+#   dfComplete%>%
+#     filter(.imp!=0)%>%
+#     summarise(across(everything(), ~fnMode(.x)), .by=all_of(vecWeightVariables))
+# })%>%
+#   bind_rows()
 
-lsBigTable <- 
-  lapply(lsStates,
-         \(x){
-           vecLevels <- svytable(~interaction(NON_ADH, PRE_DIET_EXER, VITAMIN_BIN, 
-                                              PNC_4MTH, FLU_SHOT, EXER, NO_SMK_3B, 
-                                              NO_ECIG_3B, NO_DRK_3B, DENTAL), 
-                                 subset(prams.svy2, STATE == x), na.rm = FALSE)
-           
-      
-           dfBigTable <- sapply(names(vecLevels), \(x){
-             c(str_extract_all(x, "-?[0-9]")[[1]], vecLevels[[x]])
-           })%>%
-             t()%>%
-             as.data.frame(row.names = FALSE)
-           colnames(dfBigTable) <- c('NON_ADH', vecNonAdh, 'Vals')
-           
-           dfBigTable = dfBigTable%>%
-             mutate(Vals = as.numeric(Vals))%>%
-             group_by(NON_ADH)%>%
-             mutate(Vals = Vals/sum(Vals))%>%
-             ungroup()%>%
-             filter(Vals!=0)%>%
-             mutate(across(c(1:(ncol(dfBigTable)-1)), ~factor(.x, levels = c(0,1,-1), labels = c('0', '1','NA'))))%>%
-             arrange(NON_ADH, desc(Vals))
-           
-           dfBigTable = dfBigTable[,c(1, 3, 6, 2, 9, 7, 8, 4, 5, 10, ncol(dfBigTable))]
-           colnames(dfBigTable) = c(
-             'Non Adherence',
-             'FA/multivitamin (any,1m prior)',
-             'Exercise (3+ days, 12m prior)',
-             'Among BMI ≥25, dieting or exercising (12m prior)',
-             'No drinking (3m prior)',
-             'No cigarette use (3m prior)',
-             'No e-cigarette use (3m prior)',
-             'Early prenatal care (within 4m)',
-             'Flu shot (12m prior or during pregnancy)',
-             'Dental (12m prior or during pregnancy)*',
-             'Value'
-           )
-           dfBigTable
-         })
-names(lsBigTable) <- unlist(lsStates)
-wb = createWorkbook()
-lapply(names(lsBigTable), \(x){
-  addWorksheet(wb, x)
-  writeData(wb, x, lsBigTable[[x]])
-})
-saveWorkbook(wb, file = '../output/data_files/Adherence By Variable.xlsx', overwrite=TRUE)
+# write.csv(dfStateMice,
+#           file = gzfile('../output/data_files/PRAMS_Imputed_2025_12_16.csv.gz'),
+#           row.names = F)
+dfStateMice = read.csv('../output/data_files/PRAMS_Imputed_2025_12_16.csv.gz')
+colnamesMice = colnames(dfStateMice)
+dfStateMice = lapply(colnames(dfStateMice), \(x){
+  if (is.factor(dfMerged2[[x]])){
+    return (factor(dfStateMice[[x]], levels = levels(dfMerged2[[x]])))
+  } else {return (dfStateMice[[x]])}
+})%>%
+  bind_cols()
 
+colnames(dfStateMice) = colnamesMice
+#Updating SGA_LGA and changing PRE_DIET_EXER for newer imputation of bmi
+#Similarly, changing the way health care visits are calculated along with fixing
+#error of drinking variables' interaction with their conditions
+dfStateMice = dfStateMice%>%
+  mutate(SGA = as.factor(ifelse(SGALGA==1,1,0)),
+         LGA = as.factor(ifelse(SGALGA==2,1,0)),
+         PRE_DIET_EXER = ifelse((MOM_BMIG_BC %in% c(1,2))&(STATE%in%vecMaternalStates), 
+                                2, PRE_DIET_EXER),
+         PRE_DIET_EXER = factor(PRE_DIET_EXER, labels = 0:1),
+         HLTH_CR_VIST2 = 
+           ifelse(HLTH_CR_VIST==1, 
+                  ifelse(if_any(setdiff(vecHealth, "TYP_DDS"), ~(.x==1)),
+                         2,1),HLTH_CR_VIST),
+         HLTH_CR_VIST2 = factor(HLTH_CR_VIST2, labels = 0:1))
+
+dfStateMice[which(dfMerged$DRK_2YRS==1 & !is.na(dfMerged$DRK_2YRS)),"NO_DRK_3B"]<-"1"
+dfStateMice[which(dfMerged$DRK_2YRS==1 & !is.na(dfMerged$DRK_2YRS)),"LESS_DRK_3B"]<-"1"
+
+dfStateMice$NON_ADHGRP1 = dfStateMice%>%
+  select(vecGrp1)%>%
+  mutate(across(everything(), ~!as.numeric(levels(.x))[.x]))%>%
+  mutate(NON_ADHGrp1 = ifelse(if_all(everything(), ~is.na(.)),
+                              NA,
+                              rowSums(across(vecGrp1), na.rm = T)),
+         NON_ADHGrp1 = as.factor(as.numeric(NON_ADHGrp1==length(vecGrp1))))%>%
+  select(NON_ADHGrp1)%>%
+  unlist()
+
+dfStateMice$NON_ADHGRP2 = dfStateMice%>%
+  select(vecGrp2)%>%
+  mutate(across(everything(), ~!as.numeric(levels(.x))[.x]))%>%
+  mutate(NON_ADHGrp2 = ifelse(if_all(everything(), ~is.na(.)),
+                              NA,
+                              rowSums(across(vecGrp2), na.rm = T)),
+         NON_ADHGrp2 = as.factor(as.numeric(NON_ADHGrp2==length(vecGrp2))))%>%
+  select(NON_ADHGrp2)%>%
+  unlist()
+
+dfStateMice$NON_ADHGRP3 = dfStateMice%>%
+  select(vecGrp3)%>%
+  mutate(across(everything(), ~!as.numeric(levels(.x))[.x]))%>%
+  mutate(NON_ADHGrp3 = ifelse(if_all(everything(), ~is.na(.)),
+                              NA,
+                              rowSums(across(vecGrp3), na.rm = T)),
+         NON_ADHGrp3 = as.factor(as.numeric(NON_ADHGrp3==length(vecGrp3))))%>%
+  select(NON_ADHGrp3)%>%
+  unlist()
+
+dfStateMice$NON_ADHGRP4 = dfStateMice%>%
+  select(vecGrp4)%>%
+  mutate(across(everything(), ~!as.numeric(levels(.x))[.x]))%>%
+  mutate(NON_ADHGrp4 = ifelse(if_all(everything(), ~is.na(.)),
+                              NA,
+                              rowSums(across(vecGrp4), na.rm = T)),
+         NON_ADHGrp4 = as.factor(as.numeric(NON_ADHGrp4==length(vecGrp4))))%>%
+  select(NON_ADHGrp4)%>%
+  unlist()
+
+
+svyPRAMSMI <- svydesign(ids = ~0, strata = ~SUD_NEST, 
+                        fpc = ~TOTCNT, weights = ~WTANAL, data = dfStateMice)
+
+
+dfAdh1 = svyby(~NON_ADHGRP1, ~STATE, subset(svyPRAMSMI, !is.na(NON_ADHGRP1)), svyciprop, na.rm = TRUE)
+dfAdh1%>%
+  as.data.frame()%>%
+  mutate(across(where(is.double), ~(.x)))%>%
+  summarise(Median=round(median(NON_ADHGRP1), 2),
+            IQR = paste(format(round(quantile(NON_ADHGRP1, probs = c(0.25, 0.75)), 2), nsmall = 2), collapse = '-'),
+            'Min/Max' = paste(format(round(range(NON_ADHGRP1), 2), nsmall = 2), collapse = '-'))
+
+dfAdh2 = svyby(~NON_ADHGRP2, ~STATE, subset(svyPRAMSMI, !is.na(NON_ADHGRP2)), svyciprop, na.rm = TRUE)
+dfAdh2%>%
+  as.data.frame()%>%
+  mutate(across(where(is.double), ~(.x)))%>%
+  summarise(Median=round(median(NON_ADHGRP2), 2),
+            IQR = paste(format(round(quantile(NON_ADHGRP2, probs = c(0.25, 0.75)), 2), nsmall = 2), collapse = '-'),
+            'Min/Max' = paste(format(round(range(NON_ADHGRP2), 2), nsmall = 2), collapse = '-'))
+
+dfAdh3 = svyby(~NON_ADHGRP3, ~STATE, subset(svyPRAMSMI, !is.na(NON_ADHGRP3)), svyciprop, na.rm = TRUE)
+dfAdh3%>%
+  as.data.frame()%>%
+  mutate(across(where(is.double), ~(.x)))%>%
+  summarise(Median=round(median(NON_ADHGRP3), 2),
+            IQR = paste(format(round(quantile(NON_ADHGRP3, probs = c(0.25, 0.75)), 2), nsmall = 2), collapse = '-'),
+            'Min/Max' = paste(format(round(range(NON_ADHGRP3), 2), nsmall = 2), collapse = '-'))
+
+dfAdh4 = svyby(~NON_ADHGRP4, ~STATE, subset(svyPRAMSMI, !is.na(NON_ADHGRP4)), svyciprop, na.rm = TRUE)
+dfAdh4%>%
+  as.data.frame()%>%
+  mutate(across(where(is.double), ~(.x)))%>%
+  summarise(Median=round(median(NON_ADHGRP4), 2),
+            IQR = paste(format(round(quantile(NON_ADHGRP4, probs = c(0.25, 0.75)), 2), nsmall = 2), collapse = '-'),
+            'Min/Max' = paste(format(round(range(NON_ADHGRP4), 2), nsmall = 2), collapse = '-'))
 
 ################################################################################
-#Association modeling
+#Association Modeling
 
-dfAssoc = dfMerged
+dfAssoc2 = dfStateMice
 
 #Releveling variables
-levels(dfAssoc$AGE_GRP) = list(
+levels(dfAssoc2$AGE_GRP) = list(
   "<25" = c("<20", "20-24"),
   "25-34" = c("25-29","30-34"),
   "35+" = "35+"
 )
 
-levels(dfAssoc$EDU) = list(
+levels(dfAssoc2$EDU) = list(
   "LessHS" = "LessHS",
   "CompHS" = "CompHS",
   "College" = c("SomeCollege", "Bachelors", "Graduate")
 )
 
 #New Survey Object
-prams.svy3 <- svydesign(ids = ~0, strata = ~SUD_NEST, fpc = ~TOTCNT, weights = ~WTANAL, data = dfAssoc)
-
-
+svyPRAMSMI2 <- svydesign(ids = ~0, strata = ~SUD_NEST, fpc = ~TOTCNT, 
+                         weights = ~WTANAL, data = dfAssoc2)
 ################################################################################
-#actual models
+lsStates = as.list(unique(dfMerged$STATE))
 
-#Unadjust Infant Model
-lsInfOutcomes = as.list(vecInfOutcomes)
-names(lsInfOutcomes) = vecInfOutcomes
-l1 = lapply(lsInfOutcomes, \(variable){
-  form = as.formula(paste0(variable, " ~ NON_ADH"))
-  l1 = Map(\(x){
-    m1 = svyglm(form, design = subset(prams.svy3, STATE %in% x), family = binomial(link = 'log'))
-    return(cbind('State' = x, summary(m1)$coeff[,c(1,4)], confint(m1))[-1,])
-  }, lsStates)
-  bind_rows(l1)
+lsUnadjInfLvl1 <- fnUnadjModel(lsInfOutcomes, vecADH, svyPRAMSMI2)
+lsUnadjMomLvl1 <- fnUnadjModel(lsMomOutcomes, vecADH, svyPRAMSMI2)
+fnDisplayModelTab(append(lsUnadjMomLvl1, lsUnadjInfLvl1))
+lsUnadjInfAdhLvl1 <- fnUnadjModel(lsInfOutcomes, vecNonAdh, svyPRAMSMI2)
+lsUnadjMomAdhLvl1 <- fnUnadjModel(lsMomOutcomes, vecNonAdh, svyPRAMSMI2)
+fnDisplayModelTab(append(lsUnadjMomAdhLvl1, lsUnadjInfAdhLvl1))
+lsAdjInfErr = list()
+lsAdjInfLvl1 <- fnAdjModel(lsInfOutcomes, vecAssocCovs5, vecADH, svyPRAMSMI2, lsAdjInfErr)
+lsAdjMomErr = list()
+lsAdjMomLvl1 <- fnAdjModel(lsMomOutcomes, vecAssocCovs5, vecADH, svyPRAMSMI2, lsAdjMomErr)
+fnDisplayModelTab(append(lsAdjMomLvl1, lsAdjInfLvl1))
+lsAdjInfErrAssoc = list()
+lsInfAssocLvl1  <- fnAdjModel(lsInfOutcomes, vecAssocCovs5, lsAssocCovs, svyPRAMSMI2, lsAdjInfErrAssoc)
+lsAdjMomErrAssoc = list()
+lsMomAssocLvl1  <- fnAdjModel(lsMomOutcomes, vecAssocCovs5, lsAssocCovs, svyPRAMSMI2, lsAdjMomErrAssoc)
+fnDisplayModelTab(append(lsMomAssocLvl1, lsInfAssocLvl1))
+
+#Maybe turn this into function or find a workaround
+#Running Crude on states that the adjusted models ran on
+
+
+
+lsCrudeInfLvl1 = lapply(lsInfOutcomes, \(variable){
+  lsLvl2= lapply(vecADH, \(variable2){
+    form = as.formula(paste0(c(variable, reformulate(variable2)), collapse=" "))
+    if (variable2 == "NON_ADHGRP1"){
+      lsRelStates = as.list(setdiff(vecMaternalStates, lsAdjInfErr[[variable]][[variable2]]))
+    } else { lsRelStates = as.list(setdiff(unlist(lsStates), lsAdjInfErr[[variable]][[variable2]]))}
+    lsLvl3 = Map(\(x){
+      if ((x!="IN")|(!variable%in%c("NICU", "HYP_TNS"))){
+        m1 = svyglm(form, design = subset(svyPRAMSMI2, STATE %in% x), family = binomial(link = 'log'))
+        return(cbind('State' = x, 'ADH' = variable2, summary(m1)$coeff[,c(1,4)], confint(m1))[-1,])
+      } else {return()}
+      
+    }, lsRelStates)
+    bind_rows(lsLvl3)
+  })
+  bind_rows(lsLvl2)
+  
 })
+#fnDisplayModelTab(lsCrudeInfLvl1)
 
-lsCrudeInf = lapply(l1, \(dff){
-  dff%>%
-    mutate(across(2:5, ~as.numeric(.x)),
-           Region = vecMatchStates[match(State, unlist(lsRegions))])%>%
-    group_by(Region)%>%
-    summarise(MedianEstimate = round(exp(median(Estimate)), 3),
-              IQR = paste(format(round(exp(quantile(Estimate, probs = c(0.25, 0.75))), 3), nsmall = 3), collapse = ' - '))
+lsCrudeMomLvl1 = lapply(lsMomOutcomes, \(variable){
+  lsLvl2= lapply(vecADH, \(variable2){
+    form = as.formula(paste0(c(variable, reformulate(variable2)), collapse=" "))
+    if (variable2 == "NON_ADHGRP1"){
+      lsRelStates = as.list(setdiff(vecMaternalStates, lsAdjMomErr[[variable]][[variable2]]))
+    } else {lsRelStates = as.list(setdiff(unlist(lsStates), lsAdjMomErr[[variable]][[variable2]]))}
+    lsLvl3 = Map(\(x){
+      if ((x!="IN")|(!variable%in%c("NICU", "HYP_TNS"))){
+        m1 = svyglm(form, design = subset(svyPRAMSMI2, STATE %in% x), family = binomial(link = 'log'))
+        return(cbind('State' = x, 'ADH' = variable2, summary(m1)$coeff[,c(1,4)], confint(m1))[-1,])
+      } else {return()}
+      
+    }, lsRelStates)
+    bind_rows(lsLvl3)
+  })
+  bind_rows(lsLvl2)
+  
 })
-
-dfCrudeInfOvr = bind_rows(lapply(names(l1), \(dff){
-  l1[[dff]]%>%
-    mutate(across(2:5, ~as.numeric(.x)))%>%
-    summarise(MedianEstimate = round(exp(median(Estimate)), 3),
-              IQR = paste(format(round(exp(quantile(Estimate, probs = c(0.25, 0.75))), 3), nsmall = 3), collapse = ' - '))%>%
-    mutate(Outcome = dff, Region = 'Overall')
-}))
+fnDisplayModelTab(append(lsCrudeMomLvl1, lsCrudeInfLvl1))
 
 
-
-dfCrudeInf = bind_rows(lapply(names(lsCrudeInf), \(x){
-  lsCrudeInf[[x]]%>%
-    mutate(Outcome = x)
-}))%>%
-  rbind(dfCrudeInfOvr)
-
-#Unadjusted Mom Models
-#Mom Outcomes
-lsMomOutcomes = as.list(vecMomOutcomes)
-names(lsMomOutcomes) = vecMomOutcomes
-
-#Testing the two additional mom outcomes
-#lsMomOutcomes = as.list(c(vecMomOutcomes,'MOM_DIAB1','MOM_DIAB2'))
-#names(lsMomOutcomes) = c(vecMomOutcomes,'MOM_DIAB1','MOM_DIAB2')
-
-l2 = lapply(lsMomOutcomes, \(variable){
-  form = as.formula(paste0(variable, " ~ NON_ADH"))
-  l1 = Map(\(x){
-    m1 = svyglm(form, design = subset(prams.svy3, STATE %in% x), family = binomial(link = 'log'))
-    return(cbind('State' = x, summary(m1)$coeff[,c(1,4)], confint(m1))[-1,])
-  }, lsStates)
-  bind_rows(l1)
-})
-
-lsCrudeMom = lapply(l2, \(dff){
-  dff%>%
-    mutate(across(2:5, ~as.numeric(.x)),
-           Region = vecMatchStates[match(State, unlist(lsRegions))])%>%
-    group_by(Region)%>%
-    summarise(MedianEstimate = round(exp(median(Estimate)), 3),
-              IQR = paste(format(round(exp(quantile(Estimate, probs = c(0.25, 0.75))), 3), nsmall = 3), collapse = ' - '))
-})
-
-dfCrudeMomOvr = bind_rows(lapply(names(l2), \(dff){
-  l2[[dff]]%>%
-    mutate(across(2:5, ~as.numeric(.x)))%>%
-    summarise(MedianEstimate = round(exp(median(Estimate)), 3),
-              IQR = paste(format(round(exp(quantile(Estimate, probs = c(0.25, 0.75))), 3), nsmall = 3), collapse = ' - '))%>%
-    mutate(Outcome = dff, Region = 'Overall')
-}))
-
-dfCrudeMom = bind_rows(lapply(names(lsCrudeMom), \(x){
-  lsCrudeMom[[x]]%>%
-    mutate(Outcome = x)
-}))%>%
-  rbind(dfCrudeMomOvr)
+lsSensInfErr = list()
+lsSensInfLvl1 <- fnAdjModel(lsInfOutcomes, vecAssocCovsSens, vecADH, svyPRAMSMI2, lsSensInfErr)
+lsSensMomErr = list()
+lsSensMomLvl1 <- fnAdjModel(lsMomOutcomes, vecAssocCovsSens, vecADH, svyPRAMSMI2, lsSensMomErr)
+fnDisplayModelTab(append(lsSensMomLvl1, lsSensInfLvl1))
 
 
-
-################################################################################
-#Adjusted variables
-
-#Variables to adjust for
-vecAssocCovs = c('AGE_GRP', 'EDU', 'PREG_TRY', 'PRE_CONDN', 'INS_GRP')
-
-#Adjusted Infant Models
-lsMiss = list()
-lsTest = lapply(lsInfOutcomes, \(variable){
-  form = as.formula(paste0(c(variable, reformulate(c('NON_ADH', vecAssocCovs))), collapse = " "))
-  l1 = Map(\(x){
-    tryCatch( {
-      m1 = svyglm(form, design = subset(prams.svy3, STATE %in% x), family = binomial(link = 'log'))
-      return(cbind('State' = x, summary(m1)$coeff[,c(1,4)], confint(m1))[2,])
-      },
-      error = \(e)
-      { 
-        lsMiss[[variable]] <<- append(lsMiss[[variable]], x)
+#Adding pre-term history as a covariate
+lsSens2InfErr = list()
+lsSens2InfLvl1 = lapply(lsInfOutcomes, \(variable){
+  #print(variable)
+  if (variable=="PRE_BIRTH"){
+    vecAssocFn = c(vecAssocCovs5, "P_PRTERM")
+  } else {vecAssocFn = vecAssocCovs5}
+  #vecAssocFn = vecAssocCovsSens
+  lsLvl2= lapply(vecADH, \(variable2){
+    #print(variable2)
+    form = as.formula(paste0(c(variable, reformulate(c(variable2, vecAssocFn))), collapse=" "))
+    if (variable2 == "NON_ADHGRP1"){
+      lsRelStates = as.list(vecMaternalStates)
+    } else { lsRelStates = lsStates}
+    lsLvl3 = Map(\(x){
+      #print(x)
+      tryCatch({if ((x!="IN")|(!variable%in%c("NICU", "HYP_TNS"))){
+        m1 = svyglm(form, design = subset(svyPRAMSMI2, STATE %in% x), family = binomial(link = 'log'))
+        return(cbind('State' = x, 'ADH' = variable2, summary(m1)$coeff[,c(1,4)], confint(m1))[2,])
+      } else {return()}},
+      error = \(e){
+        lsSens2InfErr[[variable]][[variable2]] <<- append(lsSens2InfErr[[variable]][[variable2]], x)
         return()
-      }
-    )
+      })
+      
+    }, lsRelStates)
+    bind_rows(lsLvl3)
     
-  }, lsStates)
+  })
+  bind_rows(lsLvl2)
+  
 })
-#lapply(lsTest, \(x) sum(sapply(x, is.null)))
-lsAdjInf = lapply(lsTest, \(dff){
-  bind_rows(dff)%>%
-    mutate(across(2:5, ~as.numeric(.x)),
-           Region = vecMatchStates[match(State, unlist(lsRegions))])%>%
-    group_by(Region)%>%
-    summarise(MedianEstimate = round(exp(median(Estimate)), 3),
-              IQR = paste(format(round(exp(quantile(Estimate, probs = c(0.25, 0.75))), 3), nsmall = 3), collapse = ' - '))
-})
+fnDisplayModelTab(lsSens2InfLvl1)
 
-dfAdjInfOvr = bind_rows(lapply(names(lsTest), \(dff){
-  bind_rows(lsTest[[dff]])%>%
-    mutate(across(2:5, ~as.numeric(.x)))%>%
-    summarise(MedianEstimate = round(exp(median(Estimate)), 3),
-              IQR = paste(format(round(exp(quantile(Estimate, probs = c(0.25, 0.75))), 3), nsmall = 3), collapse = ' - '))%>%
-    mutate(Outcome = dff, Region = 'Overall')
-}))
+#Binary Variables by ADH
+dfAdhBin = fnGenBinSumm(vecADH, vecBinCov, svyPRAMSMI)
+dfAdhMult = fnGenMultSumm(vecADH, vecMultCov, svyPRAMSMI)
 
-dfAdjInf = bind_rows(lapply(names(lsAdjInf), \(x){
-  lsAdjInf[[x]]%>%
-    mutate(Outcome = x)
-}))%>%
-  rbind(dfAdjInfOvr)
+dfAdhOutcome = fnGenBinSumm(vecADH, "HLTH_CR_VIST2", svyPRAMSMI)
+dfAdhHealth = fnGenBinSumm(vecADH, setdiff(vecHealth,"TYP_DDS"), subset(svyPRAMSMI, HLTH_CR_VIST2==1))
+dfAdhPre = fnGenBinSumm(vecADH, vecPre, subset(svyPRAMSMI, HLTH_CR_VIST2==1))
+dfAdhMomOutcomes = fnGenBinSumm(vecADH, vecMomOutcomes, svyPRAMSMI)
+dfAdhInfOutcomes = fnGenBinSumm(vecADH, vecInfOutcomes, svyPRAMSMI)
+dfNonAdhMomOutcomes = fnGenBinSumm(c(vecGrp1, vecGrp2, vecGrp3, vecGrp4), vecMomOutcomes, svyPRAMSMI)
+dfNonAdhInfOutcomes = fnGenBinSumm(c(vecGrp1, vecGrp2, vecGrp3, vecGrp4), vecInfOutcomes, svyPRAMSMI)
 
-#Adjusted Mom Models
-lsMiss2 = list()
-lsTest2 = lapply(lsMomOutcomes, \(variable){
-  form = as.formula(paste0(c(variable, reformulate(c('NON_ADH', vecAssocCovs))), collapse = " "))
-  l1 = Map(\(x){
-    tryCatch( {
-      m1 = svyglm(form, design = subset(prams.svy3, STATE %in% x), family = binomial(link = 'log'))
-      return(cbind('State' = x, summary(m1)$coeff[,c(1,4)], confint(m1))[2,])
-    },
-    error = \(e)
-    { 
-      lsMiss[[variable]] <<- append(lsMiss[[variable]], x)
-      return()
-    }
-    )
-    
-  }, lsStates)
-})
-#lapply(lsTest2, \(x) sum(sapply(x, is.null)))
-lsAdjMom = lapply(lsTest2, \(dff){
-  bind_rows(dff)%>%
-    mutate(across(2:5, ~as.numeric(.x)),
-           Region = vecMatchStates[match(State, unlist(lsRegions))])%>%
-    group_by(Region)%>%
-    summarise(MedianEstimate = round(exp(median(Estimate)), 3),
-              IQR = paste(format(round(exp(quantile(Estimate, probs = c(0.25, 0.75))), 3), nsmall = 3), collapse = ' - '))
+dfAdhVariables = fnGenBinSumm(vecADH,unlist(lsGrp), svyPRAMSMI)
+
+dfAdhMult%>%
+  rbind(dfAdhBin%>%mutate(Level=NA))%>%
+  mutate(Covariate = factor(Covariate, levels = vecVarLevels, labels = vecVarLabels),
+         Level = factor(Level, levels = vecOrdLevels, labels = vecOrdLabels))%>%
+  arrange(Covariate,Level)
+Reduce(rbind, list(dfAdhOutcome, dfAdhHealth, dfAdhPre))%>%
+  mutate(Covariate = factor(Covariate, 
+                            levels = vecHlthLevels,
+                            labels = vecHealthLabels))%>%
+  arrange(Covariate)
+
+lsAdhGrp = lapply(unlist(lsGrp), \(variable){
+  if (variable%in%c("PRE_DIET_EXER", "EXER")){
+    vecRelStates = vecMaternalStates
+  } else {vecRelStates = unlist(lsStates)}
+  dfInt = svyby(reformulate(variable), ~STATE, subset(svyPRAMSMI, STATE%in%vecRelStates), svymean)%>%
+    as.data.frame()%>%
+    select(!(starts_with("se")|ends_with("0")) )
+  
+  dfInt%>%
+    mutate(across(where(is.numeric), ~.x*100))%>%
+    rename(ADH := !!(paste0(variable,"1")))%>%
+    summarise(Median = format(round(median(ADH),1), nsmall=1),
+              IQR = paste(format(round(quantile(ADH, probs = c(0.25, 0.75)), 1), nsmall = 1), collapse = '-'),
+              'Min/Max' = paste(format(round(range(ADH), 1), nsmall = 1), collapse = '-'))%>%
+    mutate(Variable = variable)
 })
 
-dfAdjMomOvr = bind_rows(lapply(names(lsTest2), \(dff){
-  bind_rows(lsTest2[[dff]])%>%
-    mutate(across(2:5, ~as.numeric(.x)))%>%
-    summarise(MedianEstimate = round(exp(median(Estimate)), 3),
-              IQR = paste(format(round(exp(quantile(Estimate, probs = c(0.25, 0.75))), 3), nsmall = 3), collapse = ' - '))%>%
-    mutate(Outcome = dff, Region = 'Overall')
-}))
+dfAdhGrp=bind_rows(lsAdhGrp)%>%
+  mutate(Variable = factor(Variable,
+                           levels = vecLvlAdh,
+                           labels=vecLabelAdh))
+dfAdhGrp = dfAdhGrp[,c(ncol(dfAdhGrp), c(1:(ncol(dfAdhGrp)-1)))]
 
-dfAdjMom = bind_rows(lapply(names(lsAdjMom), \(x){
-  lsAdjMom[[x]]%>%
-    mutate(Outcome = x)
-}))%>%
-  rbind(dfAdjMomOvr)
+rbind(dfAdhInfOutcomes, dfAdhMomOutcomes)%>%
+  mutate(Covariate = factor(Covariate, 
+                            levels = veclvlOutTab,
+                            labels = veclblOutTab))%>%
+  arrange(Covariate)
+
+rbind(dfNonAdhInfOutcomes, dfNonAdhMomOutcomes)%>%
+  mutate(Covariate = factor(Covariate, 
+                            levels = veclvlOutTab,
+                            labels = veclblOutTab))%>%
+  arrange(Covariate)
 
 ################################################################################
-#Merge Model Outcomes
-dfMom = merge(dfCrudeMom, dfAdjMom, by = c('Outcome', 'Region'))%>%
-  mutate(Region = factor(Region, levels = c(lsOrdRegions[[1]], 'Overall')),
-         Outcome = factor(Outcome, levels = c("KESSNER", "CSEC", "HYP_TNS", "MOM_DIAB"),
-                          labels = c('Kessner Index', 'C-Section', 'Hyper Tension', 'Diabetes')))%>%
-  arrange(Outcome, Region)
 
 
 
-dfInf = merge(dfCrudeInf, dfAdjInf, by = c('Outcome', 'Region'))%>%
-  mutate(Region = factor(Region, levels = c(lsOrdRegions[[1]], 'Overall')),
-         Outcome = factor(Outcome, levels = c("SGA", "PRE_BIRTH", "DEFECT", "NICU", "LGA"),
-                          labels = c('SGA', 'Preterm Birth', 'Birth Defect', 'NICU', 'LGA')))%>%
-  arrange(Outcome, Region)
-
-
-################################################################################
-#VARIABLES BY ADHERENCE
-dfMomAdh = fnGenBinSummary(vecMomOutcomes, prams.svy3)
-dfMomAdhRegion  = fnGetRegion(dfMomAdh, lsRegions, lsOrdRegions)
-
-###MOM OUTCOMES
-dfMomAdh%>%
-  select(-c(Median_0, Median_1))%>%
-  pivot_longer(-c(1), names_to = 'State', values_to = 'Value')%>%
-  mutate(Adh = str_extract(State, '(?<=_).*'),
-         State = str_extract(State, '.*(?=_)'),
-         Region = vecMatchStates[match(State, unlist(lsRegions))],
-         Region = factor(Region, levels = lsOrdRegions[[1]]))%>%
-  pivot_wider(names_from = Adh, values_from = Value, names_prefix = "NONADH_")%>%
-  group_by(Covariate, Region)%>%
-  summarise(NONADH_0 = median(NONADH_0),
-            NONADH_1 = median(NONADH_1))
-
-dfMomAdh%>%
-  select(-c(Median_0, Median_1))%>%
-  pivot_longer(-c(1), names_to = 'State', values_to = 'Value')%>%
-  mutate(Adh = str_extract(State, '(?<=_).*'),
-         State = str_extract(State, '.*(?=_)'))%>%
-  pivot_wider(names_from = Adh, values_from = Value, names_prefix = "NONADH_")%>%
-  group_by(Covariate)%>%
-  summarise(NONADH_0 = median(NONADH_0),
-            NONADH_1 = median(NONADH_1))
-
-dfMomAdh%>%
-  select(-c(Median_0, Median_1))%>%
-  pivot_longer(-c(1), names_to = 'State', values_to = 'Value')%>%
-  mutate(Adh = str_extract(State, '(?<=_).*'),
-         State = str_extract(State, '.*(?=_)'),
-         Region = vecMatchStates[match(State, unlist(lsRegions))],
-         Region = factor(Region, levels = lsOrdRegions[[1]]))%>%
-  pivot_wider(names_from = Adh, values_from = Value, names_prefix = "NONADH_")%>%
-  group_by(Covariate, Region)%>%
-  summarise(NONADH_0 = paste0(c(round(quantile(NONADH_0, probs = c(0.25, 0.75), na.rm = TRUE),3)), collapse=" - "),
-            NONADH_1 = paste0(c(round(quantile(NONADH_1, probs = c(0.25, 0.75), na.rm = TRUE),3)), collapse=" - "))
-
-dfMomAdh%>%
-  select(-c(Median_0, Median_1))%>%
-  pivot_longer(-c(1), names_to = 'State', values_to = 'Value')%>%
-  mutate(Adh = str_extract(State, '(?<=_).*'),
-         State = str_extract(State, '.*(?=_)'))%>%
-  pivot_wider(names_from = Adh, values_from = Value, names_prefix = "NONADH_")%>%
-  group_by(Covariate)%>%
-  summarise(NONADH_0 = paste0(c(round(quantile(NONADH_0, probs = c(0.25, 0.75), na.rm = TRUE),3)), collapse=" - "),
-            NONADH_1 = paste0(c(round(quantile(NONADH_1, probs = c(0.25, 0.75), na.rm = TRUE),3)), collapse=" - "))
-
-
-###INFANT
-dfInfAdh = fnGenBinSummary(vecInfOutcomes, prams.svy3)
-dfInfAdhRegion  = fnGetRegion(dfInfAdh, lsRegions, lsOrdRegions)
-
-dfInfAdh%>%
-  select(-c(Median_0, Median_1))%>%
-  pivot_longer(-c(1), names_to = 'State', values_to = 'Value')%>%
-  mutate(Adh = str_extract(State, '(?<=_).*'),
-         State = str_extract(State, '.*(?=_)'),
-         Region = vecMatchStates[match(State, unlist(lsRegions))],
-         Region = factor(Region, levels = lsOrdRegions[[1]]))%>%
-  pivot_wider(names_from = Adh, values_from = Value, names_prefix = "NONADH_")%>%
-  group_by(Covariate, Region)%>%
-  summarise(NONADH_0 = median(NONADH_0),
-            NONADH_1 = median(NONADH_1))
-
-dfInfAdh%>%
-  select(-c(Median_0, Median_1))%>%
-  pivot_longer(-c(1), names_to = 'State', values_to = 'Value')%>%
-  mutate(Adh = str_extract(State, '(?<=_).*'),
-         State = str_extract(State, '.*(?=_)'))%>%
-  pivot_wider(names_from = Adh, values_from = Value, names_prefix = "NONADH_")%>%
-  group_by(Covariate)%>%
-  summarise(NONADH_0 = median(NONADH_0),
-            NONADH_1 = median(NONADH_1))
-
-dfInfAdh%>%
-  select(-c(Median_0, Median_1))%>%
-  pivot_longer(-c(1), names_to = 'State', values_to = 'Value')%>%
-  mutate(Adh = str_extract(State, '(?<=_).*'),
-         State = str_extract(State, '.*(?=_)'),
-         Region = vecMatchStates[match(State, unlist(lsRegions))],
-         Region = factor(Region, levels = lsOrdRegions[[1]]))%>%
-  pivot_wider(names_from = Adh, values_from = Value, names_prefix = "NONADH_")%>%
-  group_by(Covariate, Region)%>%
-  summarise(NONADH_0 = paste0(c(round(quantile(NONADH_0, probs = c(0.25, 0.75), na.rm = TRUE),3)), collapse=" - "),
-            NONADH_1 = paste0(c(round(quantile(NONADH_1, probs = c(0.25, 0.75), na.rm = TRUE),3)), collapse=" - "))
-
-dfInfAdh%>%
-  select(-c(Median_0, Median_1))%>%
-  pivot_longer(-c(1), names_to = 'State', values_to = 'Value')%>%
-  mutate(Adh = str_extract(State, '(?<=_).*'),
-         State = str_extract(State, '.*(?=_)'))%>%
-  pivot_wider(names_from = Adh, values_from = Value, names_prefix = "NONADH_")%>%
-  group_by(Covariate)%>%
-  summarise(NONADH_0 = paste0(c(round(quantile(NONADH_0, probs = c(0.25, 0.75), na.rm = TRUE),3)), collapse=" - "),
-            NONADH_1 = paste0(c(round(quantile(NONADH_1, probs = c(0.25, 0.75), na.rm = TRUE),3)), collapse=" - "))
-
-################################################################################
-#IQR Plot for model strength
-
-
-lapply(names(lsTest2), \(var){
-  dff = lsTest2[[var]]
-  bind_rows(dff)%>%
-    mutate(across(2:5, ~as.numeric(.x)),
-           Region = vecMatchStates[match(State, unlist(lsRegions))],
-           Outcome = var,
-           Type = 'Mom Outcome',
-           Estimate = exp(Estimate))
-}
-)%>%
-  bind_rows()%>%
-  rbind(lapply(names(lsTest), \(var){
-    dff = lsTest[[var]]
-    bind_rows(dff)%>%
-      mutate(across(2:5, ~as.numeric(.x)),
-             Region = vecMatchStates[match(State, unlist(lsRegions))],
-             Outcome = var,
-             Type = 'Infant Outcome',
-             Estimate = exp(Estimate))
+lsPie = lapply(seq_along(lsGrp), \(intGrp){
+  vecGrp = lsGrp[[intGrp]]
+  if (intGrp==1){
+    lsRelStates = as.list(vecMaternalStates)
+  } else { lsRelStates = lsStates}
+  
+  lsLvl2 = Map(\(x){
+    svytable(reformulate(vecGrp), subset(svyPRAMSMI, STATE%in%x))|>
+      prop.table()|>
+      as.data.frame()%>%
+      mutate(State = x)
+  }, lsRelStates)
+  
+  if(intGrp==2){
+    dfInt = bind_rows(lsLvl2)%>%
+      summarise(Freq = median(Freq), .by=vecGrp)%>%
+      mutate(Var = factor(get(vecGrp)),
+             label = ifelse(Var==0, paste0("None", intGrp), vecGrp))
+  } else {
+    dfInt = bind_rows(lsLvl2)%>%
+      summarise(Freq = median(Freq), .by=vecGrp)%>%
+      mutate(Var = (1)*(as.numeric(as.character(get(vecGrp[[1]])))) 
+             + (2)*(as.numeric(as.character(get(vecGrp[[2]])))),
+             Var = factor(Var),
+             label = ifelse(Var==0, paste0("None", intGrp), 
+                            ifelse(Var==(3), paste0("Both", intGrp),
+                                   ifelse(Var==1, vecGrp[[1]], vecGrp[[2]]))))
   }
-  )%>%
-    bind_rows())%>%
-  filter(Estimate >0.1)%>%
-  mutate(Outcome = factor(Outcome, 
-                          levels = c('DEFECT','LGA','SGA','NICU','PRE_BIRTH',
-                                     'CSEC','MOM_DIAB','HYP_TNS','KESSNER'),
-                          labels = str_wrap(c('Birth Defect','LGA Birth','SGA Birth',
-                                              'NICU Admission', 'Preterm Birth', 
-                                              'C-Section','Gestational Diabetes', 
-                                              'Hypertensive Disorders of Pregnancy','Inadequate Prenatal Care'), 
-                                            width = 20)))%>%
+  dfInt%>%
+    mutate(grp = intGrp,
+           Freq = (1/sum(Freq))*Freq)%>%
+    select(!all_of(vecGrp))
+})
+
+pltPie = bind_rows(lsPie)%>%
+  mutate(txtFreq = format(round(Freq*100,1), nsmall=1),
+         txtFreq = ifelse(txtFreq==" 0.0",NA,txtFreq),
+         grp = factor(grp, labels=vecLabelAdhGrp),
+         label = factor(label, levels = 
+                          c(lapply(seq_along(lsGrp), \(x){if(x!=2){c(paste0(c("Title", "None"),x), lsGrp[[x]], paste0("Both",x))}
+                            else {c(paste0(c("Title", "None"),x), lsGrp[[x]], " ", "  ")}})%>%unlist())))%>%
+  ggplot(aes(x="", y=Freq, fill=label))+
+  geom_bar(aes(fill = label),stat="identity", width=0.1, color="black",
+           show.legend = FALSE
+  )+
+  coord_radial("y", expand=FALSE)+
+  geom_label(aes(label = paste0(txtFreq,"%"), group=label),position = position_stack(vjust=0.5),
+             show.legend = FALSE, fill="white")+
+  #geom_label(aes(label = txtFreq), position = position_stack(vjust=0.5))+
+  facet_wrap(~grp)+
+  # scale_fill_manual(values=c("white", "#EDD1FF", "#F26FA6", "#67A7F0", "#8925DB",
+  #                            "white", "#c6f8ff", "#595cff", "white", "white",
+  #                            "white", "#E3FFD4", "#26DBDE", "#FDBB2D", "#1EB500",
+  #                            "white", "#FAEFCF", "#B2EF91", "#FA9372", "#9C7202"),
+  #                   drop=FALSE, labels=fnLabeller)+
+  scale_fill_manual(values=c("white", "#f2cedd", "#f289b5", "#c172c8", "#8925DB",
+                             "white", "#d9d9ff", "#595cff", "white", "white",
+                             "white", "#E3FFD4", "#68b694", "#6dbfbf", "#00594a",
+                             "white", "#ffdbd1", "#e68f67", "#b48777", "#57160b"),
+                    drop=FALSE, labels=fnLabeller)+
+  theme_bw()+
+  theme(axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank())
+
+ggbldPie <- ggplot_build(pltPie)
+ggbldPie$data[[2]]$x = ggbldPie$data[[2]]$x+0.03
+#ggbldPie$data[[2]]$x[13] = ggbldPie$data[[2]]$x[13]+0.03
+#ggbldPie$data[[2]]$y[13] = ggbldPie$data[[2]]$y[13]+0.03
+plot(ggplot_gtable(ggbldPie))
+
+
+################################################################################
+#Boxplot
+pltBox = lapply(names(append(lsAdjMomLvl1, lsAdjInfLvl1)), \(x) mutate(append(lsAdjMomLvl1, lsAdjInfLvl1)[[x]], Outcome=x))|>bind_rows()%>%
+  mutate(Outcome = factor(Outcome, levels = rev(vecLvlOutcomes), 
+                          labels = rev(str_wrap(vecLabelOutcomes2, width=15))),
+         Estimate = exp(as.numeric(Estimate)),
+         ADH = factor(ADH, labels = vecLabelAdhGrp))%>%
+  filter(between(Estimate, 0.2, 4))%>%
   ggplot(aes(y=Outcome, x=Estimate))+
   geom_vline(xintercept = 1)+
-  geom_boxplot(outlier.size = 3)+
-  scale_x_continuous(trans = 'log', breaks = c(0.37, 1.00, 2.72))+
+  geom_boxplot(aes(fill=ADH), outlier.size = 1, show.legend = FALSE)+
+  scale_fill_manual(values = c("#f2cedd","#d9d9ff", "#E3FFD4", "#ffdbd1"))+
+  scale_x_continuous(trans = 'log', breaks = c(0.5, 0.33, 1, 2, 3))+
   labs(x='Adjusted Risk Ratio')+
+  facet_wrap(~ADH)+
   theme_bw()+
   theme(panel.grid = element_blank(),
         axis.title.y = element_blank(),
-        axis.text.x = element_text(size = 14),
-        axis.text.y = element_text(size = 14,hjust = 0),
-        axis.title.x = element_text(size=16, face='bold'))
+        axis.text.x = element_text(size = 9),
+        axis.text.y = element_text(size = 8,hjust = 0, lineheight = 0.9),
+        axis.title.x = element_text(size=9, face='bold'))
 
 
-################################################################################
-#Total survey respondents by state
+dfStatesOutcome = fnGenStates(lsAdjMomLvl1, lsAdjInfLvl1)
+dfStatesOutcome%>%
+  View()
+dfStatesOutcome%>%
+  pivot_wider(names_from = "ADH", values_from = "States")%>%
+  View()
 
-dfStateTotal = svytotal(~STATE, prams.svy)%>%
-  as.data.frame()
+dfStatesSens1Outcome = fnGenStates(lsSensMomLvl1, lsSensInfLvl1)
+dfStatesSens1Outcome%>%
+  View()
+dfStatesSens1Outcome%>%
+  pivot_wider(names_from = "ADH", values_from = "States")%>%
+  View()
 
-dfStateTotal = dfStateTotal%>%
-  mutate(State = rownames(dfStateTotal))%>%
-  mutate(State = sub("STATE", "", State))%>%
-  select(-SE)
+dfStatesSens2Outcome = fnGenStates(lsSens2InfLvl1)
+dfStatesSens2Outcome%>%
+  filter(Variable=="Preterm Birth")%>%
+  View()
+dfStatesSens2Outcome%>%
+  filter(Variable=="Preterm Birth")%>%
+  pivot_wider(names_from = "ADH", values_from = "States")%>%
+  View()
 
-rownames(dfStateTotal)<-(1:nrow(dfStateTotal))
+fnGenStates(lsMomAssocLvl1, lsInfAssocLvl1)%>%
+  pivot_wider(names_from = "ADH", values_from = "States")%>%
+  View()
 
-dfStateTotal = rbind(dfStateTotal, 
-                     dfStateTotal%>%
-                       summarise(total = sum(total))%>%
-                       mutate(State = 'Overall'))
+dfStateMice%>%
+  select(STATE)%>%
+  summarise(Count = n(), .by=STATE)
